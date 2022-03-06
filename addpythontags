@@ -1,0 +1,95 @@
+#!/bin/sh
+MYDIR="$(dirname "$(readlink -f "$0")")"
+
+# figure out which file a library reference is actually pointing to
+seefile(){
+	if [ -n "$2" ]
+	then
+		module="$(python -c 'import '"$1"'; print('"$1.$2"'.__module__);')"
+		python -c 'import '$module'; print('$module'.__file__);'
+	else
+		python -c 'import '"$1"'; print('"$1"'.__file__);'
+	fi
+}
+
+# pull and format all of the "from X import Y" statements from all of the .py files
+getfroms(){
+	for i in $(printf "%s\n" "${pythons[@]}"); do
+		grep -rIs "^from\s.*\import" $i;
+	done |
+		while IFS= read -r p; do
+			# had to add this because "from X import *" was causing weird problems
+			echo "$p" | sed 's/\*.*$//g'; done |
+				while IFS= read -r j; do
+					if [ -z "$(echo "$j" | cut -d ' ' -f4-)" ]
+					then
+						echo "$j"
+					else
+					for i in $(echo "$j" | cut -d ' ' -f4- | sed 's/,\ /\n/g'); do
+						echo "$(echo $j | cut -d ' ' -f1,2,3) $i"; done;
+					fi
+					done | sort | uniq
+}
+
+getimports(){
+	for k in $(printf "%s\n" "${pythons[@]}"); do
+		grep -rIs "^import\s" $k; done |
+			while IFS= read -r s; do
+				echo "$(echo $s | cut -d ' ' -f2) $i";
+			done | sort | uniq
+}
+
+joinarrays(){
+	printf "%s\n" "${pythons[@]}"
+	printf "%s\n" "${outputs[@]}"
+}
+
+# create arrays to store shit
+pythons=()
+froms=()
+imports=()
+outputs=()
+addtags=()
+
+# Gathers and prints all of the python files in a directory recursively and stores them in the `pythons` variable
+pythons+=( "$(find $PWD/ -name "*.py")" )
+printf "\n##########pythons##########\n\n"
+printf "%s\n" "${pythons[@]}"
+printf "\n###########################\n\n"
+
+# prints all of the "from X import Y" statements from the python files and stores them in the `froms` variable
+froms+=( "$(getfroms)" )
+printf "\n##########froms##########\n\n"
+printf "%s\n" "${froms[@]}"
+printf "\n#########################\n\n"
+
+# Gathers all for the "import X" statements from all of the python files in the directory recursively
+imports+=(  "$(getimports)" )
+
+printf "\n##########imports##########\n\n"
+printf "%s\n" "${imports[@]}"
+printf "\n###########################\n\n"
+
+# Adds the linked library files in the `froms` variable to the `outputs` variable
+# if there are error messages the library won't be added (for example "time" has errors)
+outputs+=( "$(for j in "${froms[@]}"; do
+	echo "$j" | while IFS= read -r r; do seefile $(echo "$r" | cut -d ' ' -f2,4); done;
+done 2>/dev/null)" )
+
+# Adds the linked library files in the `imports` variable to the `outputs` variable
+outputs+=( "$(for l in "${imports[@]}"; do
+	echo "$l" | while IFS= read -r q; do seefile "$q"; done;
+done 2>/dev/null)" )
+
+printf "\n##########outputs##########\n\n"
+printf "%s\n" "${outputs[@]}" | sort | uniq
+printf "\n###########################\n\n"
+
+# combines source files from the `pythons` and `outputs` variable and stores them in the `addtags` variable
+addtags+=( "$(joinarrays | sort | uniq)" )
+printf "\n##########addtags##########\n\n"
+printf "%s\n" "${addtags[@]}"
+printf "\n###########################\n\n"
+
+# Runs ctags with all of the sourced files from this script
+printf "%s\n" "${addtags[@]}" | while IFS= read -r t; do ctags --languages=+Python -a $t; done
